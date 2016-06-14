@@ -1,0 +1,12 @@
+{
+  "version": "0.0.0",
+  "private": true,
+  "name": "moneystats",
+  "description": "A tool to display monthly used budget",
+  "license": "MIT",
+  "homepage": "https://github.com/tuningguide/",
+  "dependencies": {
+    "jquery": "1.11.0",
+    "datatables": "latest"
+  }
+}

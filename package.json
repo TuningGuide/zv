@@ -1,0 +1,23 @@
+{
+  "name": "zv_scraper",
+  "version": "0.0.1",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "description": "Scrapes Zwangerversteigerung.eu",
+  "main": "server.js",
+  "dependencies": {
+    "body-parser": "latest",
+    "cheerio": "^0.20.0",
+    "commander": "latest",
+    "express": "latest",
+    "knex": "^0.11.5",
+    "mysql2": "^1.0.0-rc.4",
+    "objection": "^0.5.0",
+    "request": "latest",
+    "yield-yield": "latest"
+  },
+  "devDependencies": {},
+  "author": "dev@valoric.de",
+  "license": "Closed"
+}

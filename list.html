@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Zwangsversteigerungen-Übersicht</title>
+	<style>
+		html {
+			font-family: "Helvetica Neue",Helvetica,Arial,sans-serif;
+			color: #07c;
+
+		}
+
+		hr {
+			border-color: #07c;
+		}
+
+		table td {
+			color: black;
+			border: 1px solid #07c;
+		}
+
+		.Zwangsversteigerung {
+			width: 80px;
+			overflow: hidden;
+			display: inline-block;
+			white-space: nowrap;
+		}
+
+		table .number {
+			text-align: right;
+		}
+
+		#content {
+			hyphens: auto;
+		}
+
+		#content table.dataTable thead th {
+			hyphens: manual;
+			box-sizing: border-box;
+			padding: 2px 15px 2px 2px;
+		}
+
+		#content table.dataTable tbody td {
+			padding: 5px;
+		}
+
+		@keyframes blink {
+			0% { opacity: .2; }
+			20% { opacity: 1; }
+			100% { opacity: .2; }
+		}
+
+		.saving {
+			position: absolute;
+			display: block;
+			top: -10px;
+			left: -5px;
+			width: 63px;
+			text-align: left;
+			margin: 0;
+			background: rgba(255, 255, 255, 0.8);
+			border: 2px solid #07c;
+			padding: 3px 5px;
+		}
+
+		.saving span {
+			animation:  1.4s blink infinite;
+			/**
+			 * This makes sure that the starting style (opacity: .2)
+			 * of the animation is applied before the animation starts.
+			 * Otherwise we would see a short flash or would have
+			 * to set the default styling of the dots to the same
+			 * as the animation. Same applies for the ending styles.
+			 */
+			animation-fill-mode: both;
+		}
+
+		.saving span:nth-child(2) {
+			animation-delay: .2s;
+		}
+
+		.saving span:nth-child(3) {
+			animation-delay: .4s;
+		}
+	</style>
+	<!-- DataTables CSS -->
+	<link rel="stylesheet" type="text/css" href="bower_components/datatables/media/css/jquery.dataTables.css">
+
+	<!-- jQuery -->
+	<script type="text/javascript" charset="utf8" src="bower_components/jquery/dist/jquery.js"></script>
+
+	<!-- DataTables -->
+	<script type="text/javascript" charset="utf8" src="bower_components/datatables/media/js/jquery.dataTables.js"></script>
+
+
+	<script src="http://maps.googleapis.com/maps/api/js?key=AIzaSyDAjZ928z9khTKRJb4siAFvCMh_RmjQ3nw"></script>
+	<script>
+		// Globals
+		var table = null;
+		var datatable = null;
+		var map = null;
+		var geocoder = null;
+		var lastGeocoderCall = null;
+
+		var columns = [
+			{
+				"title": "Nr.",
+				"data": null,
+				"className": 'rowNumber'
+			},
+			{
+				"title": "ZVG-ID",
+				"data": 'id',
+				"render": function( data, type, row, meta ) {
+					return '<a href="'+row['uri']+'">'+data+'</a>';
+				},
+				className: 'id'
+			},
+			{
+				"title": "Adresse",
+				"data": "address",
+				"defaultContent": "-",
+				"className": "inputable"
+			},
+			{
+				"title": "Objektart",
+				"data": "kind",
+				"defaultContent": "-",
+				"className": "inputable"
+			},
+			{
+				"title": "Verkehrs&shy;wert",
+				"data": "marketValue",
+				"defaultContent": "-",
+				"render": function( data, type, row, meta ) {
+					return data ? data.replace(/(\d*\.\d*),\d*/, '$1') : data;
+				},
+				"className": "inputable"
+			},
+			{
+				"title": "Gläubiger",
+				"data": "debtee",
+				"defaultContent": "-",
+				"className": "inputable"
+			},
+			{
+				"title": "Termin",
+				"data": "auctionDate",
+				"defaultContent": "-",
+				"className": "inputable"
+			},
+			{
+				"title": "Beschreibung",
+				"data": "description",
+				"defaultContent": "-",
+				"className": "inputable"
+			},
+			{
+				"title": "m²",
+				"data": "qm",
+				"defaultContent": "0",
+				"render": function( data, type, row, meta ) {
+					return Array.isArray(data) && data.length ? data.join(', ') : (typeof data == 'string' ? data :  "0");
+				},
+				className: 'number inputable'
+			},
+			{
+				"title": "€/m²",
+				"data": null,
+				"render": function ( data, type, row, meta ) {
+					if('qm' in row && 'marketValue' in row) {
+						var verkehrswert = parseFloat(row['marketValue'].replace('.', '').replace(',', '.'));
+						var qm = parseFloat( (Array.isArray(row['qm']) && row['qm'].length ? row['qm'][0] : (typeof row['qm'] == 'string' ? row['qm'] :  "0")) );
+						if(qm > 0 && verkehrswert > 0) {
+							return (verkehrswert/qm).toFixed(0);
+						}
+					}
+
+					return type === 'display' ? "-" : "9999";
+				},
+				className: 'number'
+			},
+			{
+				"title": "Gut&shy;achten",
+				"data": "expertiseLinks",
+				"defaultContent": "-",
+				"render": function( data, type, row, meta ) {
+					if(data) {
+						return data.map(function(url, i) {
+							return '<a href="'+url+'" target="_blank">'+(url.indexOf('00/00') == -1 ? 'Link' : 'PDF')+' '+i+'</a>';
+						}).join(',');
+					}
+					return "-";
+				},
+			},
+			{
+				"title": "Ver&shy;mietet",
+				"data": "rent",
+				"defaultContent": "-",
+				"className": "inputable"
+			},
+			{
+				"title": "Stell&shy;platz",
+				"data": "parkingSite",
+				"defaultContent": "-",
+				"className": "inputable"
+			},
+			{
+				"title": "Balkon / Terrasse",
+				"data": "balcony",
+				"defaultContent": "-",
+				"className": "inputable"
+			},
+			{
+				"title": "Fahr&shy;stuhl",
+				"data": "lift",
+				"defaultContent": "-",
+				"className": "inputable"
+			},
+			{
+				"title": "Stock&shy;werk",
+				"data": "level",
+				"defaultContent": "-",
+				"className": "inputable"
+			},
+			{
+				"title": "Rück&shy;lagen",
+				"data": "sinkingFund",
+				"defaultContent": "-",
+				"className": "inputable"
+			},
+		];
+
+		function mapMarkerIcon(number) {
+			return 'data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2238%22%20height%3D%2238%22%20viewBox%3D%220%200%2038%2038%22%3E%3Cpath%20fill%3D%22%23808080%22%20stroke%3D%22%23ccc%22%20stroke-width%3D%22.5%22%20d%3D%22M34.305%2016.234c0%208.83-15.148%2019.158-15.148%2019.158S3.507%2025.065%203.507%2016.1c0-8.505%206.894-14.304%2015.4-14.304%208.504%200%2015.398%205.933%2015.398%2014.438z%22%2F%3E%3Ctext%20transform%3D%22translate%2819%2018.5%29%22%20fill%3D%22%23fff%22%20style%3D%22font-family%3A%20Arial%2C%20sans-serif%3Bfont-weight%3Abold%3Btext-align%3Acenter%3B%22%20font-size%3D%2212%22%20text-anchor%3D%22middle%22%3E' + number + '%3C%2Ftext%3E%3C%2Fsvg%3E';
+		}
+
+		function addToMap(query, obfuscatedQuery, id) {
+			if(!geocoder) geocoder = new google.maps.Geocoder();
+			setTimeout(function() {
+				lastGeocoderCall = Date.now();
+				geocoder.geocode({'address': query}, function (results, status) {
+					if (status == google.maps.GeocoderStatus.OK) {
+						var marker = new google.maps.Marker({
+							position: results[0].geometry.location,
+							map: map,
+							icon: mapMarkerIcon(id+1)
+						});
+					}
+					else if (status == google.maps.GeocoderStatus.OVER_QUERY_LIMIT) {
+						alert("The google maps query contigent has been exhausted. Please retry in 2-3 minutes.");
+
+					} else {
+						alert("Could not find marker location: " + query);
+					}
+				});
+			}, id*1000); // wait for every row one second
+		}
+
+		var createdRowCallback = function( row, data, dataIndex ) {
+			if(data['Adresse']) {
+				var query = data['Adresse'].trim();
+				var name = query.replace(/[^a-zA-Z0-9-_]/g, '');
+				addToMap(query, name, dataIndex);
+			}
+
+			$('td.rowNumber',row).html(dataIndex+1);
+		};
+
+		var savingInfo = function(bool, element) {
+			if(bool) {
+				var sEl = $('<p class="saving">Saving<span>.</span><span>.</span><span>.</span></p>');
+				$(element).css('position', 'relative').append(sEl);
+			}
+			else {
+				$('.saving', element).remove();
+			}
+		};
+
+		var preFocusValue = null;
+		var saveFieldData = function (data) {
+			if(data && data.value != data.element.textContent) {
+				data.value = data.element.textContent;
+				savingInfo(true, data.element);
+				$.ajax({
+					url: "data.json?id="+data.id,
+					data: {field: data.field, value: data.value},
+					type: "POST"
+				}).done(function(data) {
+				}).fail(function(jqXHR, textStatus, errorThrown) {
+					alert( "Could not save data: "+data.value+" ("+textStatus+")" );
+				}).always(function () {
+					savingInfo(false, data.element);
+				})
+				console.log(data);
+			}
+		};
+
+		$( window ).unload(function() {
+			if(preFocusValue) {
+				saveFieldData(preFocusValue);
+			}
+		});
+
+		var columnsMap = [];
+		for(let i=0; i < columns.length; i++) {
+			columnsMap[i] = columns[i].data;
+		}
+
+		var createCellCallback = function (td, cellData, rowData, row, col) {
+			td.style.minWidth = Math.min(1.5*td.textContent.length, 400)+'px';
+			if ( $(td).hasClass('inputable') ) {
+				var fieldName = columnsMap[col];
+				var id = rowData['id'];
+				$(td)
+					.attr('contenteditable', "true")
+					.focus(function () {
+						preFocusValue = {id: id, field: fieldName, value: this.textContent, element: this};
+					})
+					.blur(function () {
+						if(preFocusValue.value != this.textContent) {
+							saveFieldData(preFocusValue);
+							table.cell(row, col).data(this.textContent);
+						}
+						preFocusValue = null;
+					});
+			}
+		};
+
+		$(document).ready(function(){
+			//data.forEach(function(d) {
+			var div = $('<div></div>');
+			$("#content").append(div);
+			//div.append('<h1>'+d['name']+'</h1><span>'+d['info']+'</span><hr>');
+
+			table = $('<table class="datatable"><thead></thead><tbody></tbody></table>');
+			div.append(table);
+
+			var mapDiv = $('<div id="googleMap" style="width:1000px;height:600px; margin:auto"></div>');
+			div.append(mapDiv);
+
+			var mapProp = {
+				center:new google.maps.LatLng(51.00, 9.00),
+				zoom: 6,
+				mapTypeId: google.maps.MapTypeId.ROADMAP,
+				scrollwheel: false
+			};
+			map = new google.maps.Map(document.getElementById("googleMap"), mapProp);
+
+			$.ajax({
+				url: "params.json"+window.location.search,
+			}).done(function(data) {
+				geocoder = new google.maps.Geocoder();
+				console.log("searching for address", data.params.address);
+				geocoder.geocode( { 'address': data.params.address }, function(results, status) {
+					if (status == google.maps.GeocoderStatus.OK) {
+						map.setCenter(results[0].geometry.location);
+
+						let circle = new google.maps.Circle({
+							clickable: false,
+							strokeColor: '#FF0000',
+							strokeOpacity: 0.5,
+							strokeWeight: 2,
+							fillColor: '#FF0000',
+							fillOpacity: 0,
+							map: map,
+							center: results[0].geometry.location,
+							radius: data.params.distance * 1000
+						});
+						let bounds = circle.getBounds();
+						map.fitBounds(bounds);
+					} else {
+						alert("Could not find location: " + data.params.address );
+					}
+				});
+			}).fail(function() {
+				alert( "Could not load google map params ("+"params.json"+window.location.search+")" );
+			});
+
+			datatable = table.DataTable({
+				paging: false,
+				ajaxSource: "data.json"+window.location.search,
+				columns: columns,
+				createdRow: createdRowCallback,
+				columnDefs: [ { targets: '_all', createdCell: createCellCallback } ],
+				scrollX: 2000
+			});
+		});
+	</script>
+</head>
+<body>
+<div id="content" lang="de"></div>
+</body>
+</html>
