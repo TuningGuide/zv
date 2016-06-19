@@ -257,8 +257,8 @@
 		}
 
 		var createdRowCallback = function( row, data, dataIndex ) {
-			if(data['Adresse']) {
-				var query = data['Adresse'].trim();
+			if(data['address']) {
+				var query = data['address'].trim();
 				var name = query.replace(/[^a-zA-Z0-9-_]/g, '');
 				addToMap(query, name, dataIndex);
 			}
