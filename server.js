@@ -46,6 +46,9 @@ var server = http.createServer(app).listen(program.port, function () {
 
 let config = {
 	baseUrl: "http://www.zwangsversteigerung.eu",
+	zvgPortal: {
+		url: 'http://www.zvg-portal.de/'
+	},
 	zvsachsen: {
 		url: 'https://zvsachsen.de/',
 		pdfBaseUrl: 'https://upload.immobilienpool.de/immobilien/00/00/'
@@ -84,12 +87,59 @@ function zvEuToZvgPortal(body) {
 	let $ = cheerio.load(body);
 
 	let form = $('.more-box form');
-	let inputs = form.find('input[type!="hidden"]').get();
+	let inputs = form.find('input').get();
 	let formData = {};
 	for(let input of inputs) {
 		formData[$(input).attr('name')] = $(input).attr('value');
 	}
 	return {uri: form.attr('action'), form: formData};
+}
+
+function getDetailLinkZvgPortal(body) {
+	let $ = cheerio.load(body);
+	let links = $('#inhalt table tr:first-child a').get();
+	if(links.length > 1) {
+		console.log("More than one zvg portal result for:", links.map(l => l.href));
+	}
+	return config.zvgPortal.url+links[0].attribs.href;
+}
+
+function getDetailsInformationZvgPortal(body) {
+	let $ = cheerio.load(body);
+
+	for(let tr of $('#anzeige tr').get()) {
+		if($(tr.children[0]).text().trim() == "Beschreibung:") {
+			return $(tr.children[1]).text();
+		}
+	}
+	return null;
+}
+
+function* getDetailsZvgPortal(body) {
+	let headers = {
+		'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/32.0.1700.107 Chrome/32.0.1700.107 Safari/537.36',
+		'Origin': config.zvgPortal.url,
+		'Referer': config.zvgPortal.url
+	};
+	let requestC = request.defaults({jar: true, headers: headers});
+	let response;
+
+	response = yield requestC.post(zvEuToZvgPortal(body), yield);
+	let link = getDetailLinkZvgPortal(response[1]);
+
+	response = yield requestC(link, yield);
+	return getDetailsInformationZvgPortal(response[1]);
+}
+
+function extractQMFromDescription(data) {
+	if('description' in data) {
+		let regExp = /(\d+).?(\d*)\s*(m²|qm)/g
+		let match;
+		while(match = regExp.exec(data['description'])) {
+			let qm = match[1] + '.' + (match[2] ? match[2] : '00');
+			data['qm'].push(qm);
+		}
+	}
 }
 
 function extractInformation(body) {
@@ -129,15 +179,6 @@ function extractInformation(body) {
 	}
 
 	data['qm'] = [];
-	if('description' in data) {
-		let regExp = /(\d+).?(\d*)\s*(m²|qm)/g
-		let match;
-		while(match = regExp.exec(data['description'])) {
-			let qm = match[1] + '.' + (match[2] ? match[2] : '00');
-			data['qm'].push(qm);
-		}
-	}
-
 	return data;
 }
 
@@ -171,26 +212,25 @@ app.get('/params.json', function(req, res) {
 });
 
 app.get('/data.json', o_o(function *(req, res) {
-	let requestC = request.defaults({jar: true, baseUrl: config.baseUrl});
+	let headers = {
+		'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/32.0.1700.107 Chrome/32.0.1700.107 Safari/537.36',
+		'Origin': config.baseUrl,
+		'Referer': config.baseUrl
+	};
+	let requestC = request.defaults({jar: true, baseUrl: config.baseUrl, headers: headers});
 
 	let loginData = {
 		"user_session[email]": "veltenheyn@web.de",
 		"user_session[password]": "leipzig01",
 	};
 
-	let headers = {
-		'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/32.0.1700.107 Chrome/32.0.1700.107 Safari/537.36',
-		'Origin': config.baseUrl,
-		'Referer': config.baseUrl
-	};
-
 	let response;
-	response = yield requestC.post({uri: "/user_sessions", qs: loginData, followRedirect: false, headers: headers}, yield);
+	response = yield requestC.post({uri: "/user_sessions", qs: loginData, followRedirect: false}, yield);
 	if(response[0].statusCode > 302) {
 		console.error('Login failed: '+response[0].statusCode);
 	}
 
-	response = yield requestC({uri: "/umkreissuche", qs: getDefaultParams(req.query), headers: headers}, yield);
+	response = yield requestC({uri: "/umkreissuche", qs: getDefaultParams(req.query)}, yield);
 
 	let detailLinks = new Set();
 
@@ -207,7 +247,7 @@ app.get('/data.json', o_o(function *(req, res) {
 	}
 
 	for(let link of listLinks) {
-		let response = yield requestC({uri: link, headers: headers}, yield);
+		let response = yield requestC({uri: link}, yield);
 		let $ = cheerio.load(response[1]); // var body = response[1];
 		for(let a of $('.ps li a').get()) {
 			detailLinks.add($(a).attr('href'));
@@ -217,9 +257,15 @@ app.get('/data.json', o_o(function *(req, res) {
 	let details = [];
 	for(let link of detailLinks) {
 		requestC = requestC.defaults({baseUrl: ''});
-		let response = yield requestC({uri: link, headers: headers}, yield);
+		let response = yield requestC({uri: link}, yield);
 		let data = extractInformation(response[1]);
 		if(data) {
+			let zvgDescription = yield getDetailsZvgPortal(response[1]);
+			if(zvgDescription) { // overwrite existing description with zvg description
+				data['description'] = zvgDescription;
+				extractQMFromDescription(data);
+			}
+
 			data['uri'] = link;
 
 			let formData = {
@@ -227,7 +273,7 @@ app.get('/data.json', o_o(function *(req, res) {
 				_submit: 1,
 			};
 
-			response = yield request.get({uri: config.zvsachsen.url, qs: formData, headers: headers}, yield);
+			response = yield request.get({uri: config.zvsachsen.url, qs: formData}, yield);
 			data['expertiseLinks'] = yield extractPDFLinks(response[1], data['id']);
 
 			let object = yield Object.query().select('Object.*').where('id', '=', toNumericID(data['id'])).first();
